@@ -10,7 +10,6 @@ Conformalized Quantile Regression is an algorithm proposed in 2019 by a Romano, 
 ## Installation and Usage
 Before installing the module you will need `numpy`, `scipy` and `scikit-learn`.
 Dependencies associated with the previous modules may need root privileges to install
-Consult the [API Reference](http://contrib.scikit-learn.org/forest-confidence-interval/reference/index.html) for documentation on core functionality
 
 ```
 pip install numpy scipy scikit-learn

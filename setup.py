@@ -16,8 +16,8 @@ try:
 except ImportError:
     warnings.warn('scipy is required during installation', ImportWarning)
 
-# Get version and release info, which is all stored in forestci/version.py
-ver_file = os.path.join('forestci', 'version.py')
+# Get version and release info, which is all stored in conformalized/version.py
+ver_file = os.path.join('conformalized', 'version.py')
 with open(ver_file) as f:
     exec(f.read())
 

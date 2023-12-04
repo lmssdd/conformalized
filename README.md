@@ -23,5 +23,5 @@ pip install -r requirements.txt
 
 To install `conformalized` execute:
 ```shell
-pip install git+git://github.com/lmssdd/conformalized.git
+pip install git+https://github.com/lmssdd/conformalized.git
 ```

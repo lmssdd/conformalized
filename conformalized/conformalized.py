@@ -2,7 +2,7 @@ import numpy as np
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.model_selection import RandomizedSearchCV
+from sklearn.model_selection import KFold, RandomizedSearchCV, train_test_split
 
 class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
     """Conformalized Histogram-based Gradient Boosting Regression Tree.
@@ -280,10 +280,10 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         params['quantile'] = 0.5
         estimator = HistGradientBoostingRegressor(**params)
         params_distributions = dict(
-            max_leaf_nodes=randint(low=10, high=50),
-            max_depth=randint(low=3, high=20),
-            max_iter=randint(low=50, high=100),
-            learning_rate=uniform()
+            max_leaf_nodes=np.randint(low=10, high=50),
+            max_depth=np.randint(low=3, high=20),
+            max_iter=np.randint(low=50, high=100),
+            learning_rate=np.uniform()
         )
         optim_model = RandomizedSearchCV(
             estimator,
@@ -293,7 +293,7 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
             cv=KFold(n_splits=5, shuffle=True),
             verbose=0
         )
-        optim_model.fit(X_train, y_train)
+        optim_model.fit(X, y)
         estimator = optim_model.best_estimator_
         self.max_iter = estimator.get_params()['max_iter']
         self.learning_rate = estimator.get_params()['learning_rate']

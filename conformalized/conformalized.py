@@ -3,6 +3,7 @@ from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import KFold, RandomizedSearchCV, train_test_split
+from sklearn.metrics import mean_pinball_loss
 from scipy.stats import randint, uniform
 
 class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
@@ -257,6 +258,35 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         self.corrections_ = {}
     
     
+    def score(self, X, y, sample_weight=None):
+        """Returns the sum of pinball losses for the quantiles.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input samples.
+
+        y : array-like of shape (n_samples,)
+            Target values.
+
+        sample_weight : array-like of shape (n_samples,) default=None
+            Weights of training data.
+
+        Returns
+        -------
+        score : float
+        """
+        score = 0.
+        for i in range(len(self.quantiles)):
+            estimator = self.estimators_[i]
+            score += mean_pinball_loss(y, 
+                                       self.estimators_[i].predict(X), 
+                                       alpha=self.quantiles[i], 
+                                       sample_weight=sample_weight)
+        return score
+    
+    
+
     def optimize(self, X, y, n_iter=10):
         """Optimize model parameters with Randomized Search Cross Validation
         Optimized parameters are:

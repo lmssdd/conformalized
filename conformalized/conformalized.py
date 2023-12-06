@@ -285,7 +285,8 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         params = self.get_params().copy()
         params.pop('quantiles')
         params['loss'] = 'quantile'
-        for q, estimator in zip(self.quantiles, self.estimators_):
+        for i in range(len(self.quantiles)):
+            q = self.quantiles[i]
             params['quantile'] = q
             params_distributions = dict(
                 max_leaf_nodes=randint(low=2, high=31),
@@ -293,6 +294,7 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
                 max_iter=randint(low=50, high=100),
                 learning_rate=uniform()
             )
+            estimator = HistGradientBoostingRegressor(**params)
             optim_model = RandomizedSearchCV(
                 estimator,
                 param_distributions=params_distributions,
@@ -302,7 +304,7 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
                 verbose=0
             )
             optim_model.fit(X, y)
-            estimator = optim_model.best_estimator_
+            self.estimators_[i] = optim_model.best_estimator_
 
         return self
     

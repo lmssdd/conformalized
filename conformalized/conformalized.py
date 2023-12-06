@@ -2,9 +2,9 @@ import numpy as np
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
 from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.model_selection import KFold, RandomizedSearchCV, train_test_split
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import mean_pinball_loss
-from scipy.stats import randint, uniform
+import pandas as pd
 
 class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
     """Conformalized Histogram-based Gradient Boosting Regression Tree.
@@ -247,46 +247,11 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
             random_state=random_state,
         )
         self.quantiles = quantiles
+        self.corrections = {}
+        self.quantiles_ = [0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.999]
         self.estimators_ = []
-        for q in self.quantiles:
-            params = self.get_params().copy()
-            params.pop('quantiles')
-            params['loss'] = 'quantile'
-            params['quantile'] = q
-            estimator = HistGradientBoostingRegressor(**params)
-            self.estimators_.append(estimator)
-        self.corrections_ = {}
     
     
-    def score(self, X, y, sample_weight=None):
-        """Returns the sum of pinball losses for the quantiles.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            The input samples.
-
-        y : array-like of shape (n_samples,)
-            Target values.
-
-        sample_weight : array-like of shape (n_samples,) default=None
-            Weights of training data.
-
-        Returns
-        -------
-        score : float
-        """
-        score = 0.
-        for i in range(len(self.quantiles)):
-            estimator = self.estimators_[i]
-            score += mean_pinball_loss(y, 
-                                       self.estimators_[i].predict(X), 
-                                       alpha=self.quantiles[i], 
-                                       sample_weight=sample_weight)
-        return score
-    
-    
-
     def optimize(self, X, y, n_iter=10):
         """Optimize model parameters with Randomized Search Cross Validation
         Optimized parameters are:
@@ -315,29 +280,33 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         params = self.get_params().copy()
         params.pop('quantiles')
         params['loss'] = 'quantile'
-        for i in range(len(self.quantiles)):
-            q = self.quantiles[i]
-            params['quantile'] = q
-            params_distributions = dict(
-                max_leaf_nodes=randint(low=2, high=31),
-                max_depth=randint(low=1, high=16),
-                max_iter=randint(low=50, high=100),
-                learning_rate=uniform()
-            )
-            estimator = HistGradientBoostingRegressor(**params)
-            optim_model = RandomizedSearchCV(
-                estimator,
-                param_distributions=params_distributions,
-                n_jobs=-1,
-                n_iter=n_iter,
-                cv=KFold(n_splits=5, shuffle=False),
-                verbose=0
-            )
-            optim_model.fit(X, y)
-            self.estimators_[i] = optim_model.best_estimator_
-
+        params['quantile'] = 0.5
+        estimator = HistGradientBoostingRegressor(**params)
+        params_distributions = dict(
+            max_leaf_nodes=randint(low=10, high=50),
+            max_depth=randint(low=3, high=20),
+            max_iter=randint(low=50, high=100),
+            learning_rate=uniform()
+        )
+        optim_model = RandomizedSearchCV(
+            estimator,
+            param_distributions=params_distributions,
+            n_jobs=-1,
+            n_iter=n_iter,
+            cv=KFold(n_splits=5, shuffle=True),
+            verbose=0
+        )
+        optim_model.fit(X_train, y_train)
+        estimator = optim_model.best_estimator_
+        self.max_iter = estimator.get_params()['max_iter']
+        self.learning_rate = estimator.get_params()['learning_rate']
+        
         return self
     
+    def _sample(self, q, size=100):
+        return np.interp(np.random.uniform(size=size), 
+                         np.linspace(0,1,len(q)), 
+                         q.sort_values())
     
     def fit(self, X, y, sample_weight=None):
         """Fit the gradient boosting models for the quantiles.
@@ -359,10 +328,44 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
             Fitted estimator.
         """
         
-        for estimator in self.estimators_:
+        for q in self.quantiles_:
+            params = self.get_params().copy()
+            params.pop('quantiles')
+            params['loss'] = 'quantile'
+            params['quantile'] = q
+            estimator = HistGradientBoostingRegressor(**params)
             estimator.fit(X, y, sample_weight)
+            self.estimators_.append(estimator)
         
         return self
+    
+    
+    def score(self, X, y, sample_weight=None):
+        """Reurns the sum of pinball losses for the quantiles.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The input samples.
+
+        y : array-like of shape (n_samples,)
+            Target values.
+
+        sample_weight : array-like of shape (n_samples,) default=None
+            Weights of training data.
+
+        Returns
+        -------
+        score : float
+        """
+        score = 0.
+        for i in range(len(self.quantiles_)):
+            estimator = self.estimators_[i]
+            score += mean_pinball_loss(y, 
+                                       self.estimators_[i].predict(X), 
+                                       alpha=self.quantiles_[i], 
+                                       sample_weight=sample_weight)
+        return score
     
     
     def calibrate(self, X, y, c=None):
@@ -388,11 +391,13 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         if c is None:
             c = np.zeros(len(y), dtype=int)
         
+        y_hat = self.predict(X)
+        
         for l in np.unique(c):
-            self.corrections_[l] = []
-            for q, e in zip(self.quantiles, self.estimators_):
-                error = y[c==l] - e.predict(X[c==l])
-                self.corrections_[l].append(np.quantile(error, q, method="higher"))
+            self.corrections[l] = []
+            for i in range(len(self.quantiles)):
+                error = y[c==l] - y_hat[c==l,i]
+                self.corrections[l].append(np.quantile(error, self.quantiles[i], method="higher"))
         
         return self
     
@@ -411,11 +416,14 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
             The predicted values.
         """
         
-        y = []
+        q = []
         for e in self.estimators_:
-            y.append(e.predict(X))
+            q.append(e.predict(X))
+        q = np.stack(q, axis=1)
+        q = pd.DataFrame(q)
+        ys = q.apply(self._sample, axis=1, result_type='expand')
         
-        return np.stack(y, axis=1)
+        return ys.quantile(self.quantiles, axis=1).values.T
     
     
     def conformalize(self, y, c=None):
@@ -439,7 +447,7 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         
         yc = y.copy()
         for l in np.unique(c):
-            yc[c==l] = yc[c==l] + self.corrections_[l]
+            yc[c==l] = yc[c==l] + self.corrections[l]
         
         return yc
         

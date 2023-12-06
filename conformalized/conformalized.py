@@ -247,6 +247,13 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         )
         self.quantiles = quantiles
         self.estimators_ = []
+        for q in self.quantiles:
+            params = self.get_params().copy()
+            params.pop('quantiles')
+            params['loss'] = 'quantile'
+            params['quantile'] = q
+            estimator = HistGradientBoostingRegressor(**params)
+            self.estimators_.append(estimator)
         self.corrections_ = {}
     
     
@@ -278,27 +285,25 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         params = self.get_params().copy()
         params.pop('quantiles')
         params['loss'] = 'quantile'
-        params['quantile'] = 0.5
-        estimator = HistGradientBoostingRegressor(**params)
-        params_distributions = dict(
-            max_leaf_nodes=randint(low=10, high=50),
-            max_depth=randint(low=3, high=20),
-            max_iter=randint(low=50, high=100),
-            learning_rate=uniform()
-        )
-        optim_model = RandomizedSearchCV(
-            estimator,
-            param_distributions=params_distributions,
-            n_jobs=-1,
-            n_iter=n_iter,
-            cv=KFold(n_splits=5, shuffle=True),
-            verbose=0
-        )
-        optim_model.fit(X, y)
-        estimator = optim_model.best_estimator_
-        self.max_iter = estimator.get_params()['max_iter']
-        self.learning_rate = estimator.get_params()['learning_rate']
-        
+        for q, estimator in zip(self.quantiles, self.estimators_):
+            params['quantile'] = q
+            params_distributions = dict(
+                max_leaf_nodes=randint(low=2, high=31),
+                max_depth=randint(low=1, high=16),
+                max_iter=randint(low=50, high=100),
+                learning_rate=uniform()
+            )
+            optim_model = RandomizedSearchCV(
+                estimator,
+                param_distributions=params_distributions,
+                n_jobs=-1,
+                n_iter=n_iter,
+                cv=KFold(n_splits=5, shuffle=False),
+                verbose=0
+            )
+            optim_model.fit(X, y)
+            estimator = optim_model.best_estimator_
+
         return self
     
     
@@ -322,14 +327,8 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
             Fitted estimator.
         """
         
-        for q in self.quantiles:
-            params = self.get_params().copy()
-            params.pop('quantiles')
-            params['loss'] = 'quantile'
-            params['quantile'] = q
-            estimator = HistGradientBoostingRegressor(**params)
+        for estimator in self.estimators_:
             estimator.fit(X, y, sample_weight)
-            self.estimators_.append(estimator)
         
         return self
     

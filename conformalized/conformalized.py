@@ -207,6 +207,7 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
     def __init__(
         self,
         quantiles=[0.5],
+        n_samples=100,
         learning_rate=0.1,
         max_iter=100,
         max_leaf_nodes=31,
@@ -247,6 +248,7 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
             random_state=random_state,
         )
         self.quantiles = quantiles
+        self.n_samples = n_samples
         self.corrections = {}
         self.quantiles_ = [0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.999]
         self.estimators_ = []
@@ -303,8 +305,8 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         
         return self
     
-    def _sample(self, q, size=100):
-        return np.interp(np.random.uniform(size=size), 
+    def _sample(self, q):
+        return np.interp(np.random.uniform(size=self.n_samples), 
                          np.linspace(0,1,len(q)), 
                          q.sort_values())
     

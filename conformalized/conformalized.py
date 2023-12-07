@@ -345,6 +345,7 @@ class ConfGradientBoostingRegressor(GradientBoostingRegressor):
             Fitted estimator.
         """
         
+        self.estimators_ = []
         for q in self.quantiles:
             params = self.get_params().copy()
             params.pop('quantiles')

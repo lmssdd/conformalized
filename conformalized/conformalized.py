@@ -1,26 +1,21 @@
 import numpy as np
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 
-from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.model_selection import RandomizedSearchCV
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_pinball_loss
-import pandas as pd
 
-class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
+class ConfGradientBoostingRegressor(GradientBoostingRegressor):
     """Conformalized Histogram-based Gradient Boosting Regression Tree.
 
     This estimator is based on
-    :class:`HistGradientBoostingRegressor<sklearn.ensemble.HistGradientBoostingRegressor>`
+    :class:`GradientBoostingRegressor<sklearn.ensemble.GradientBoostingRegressor>`
     with additional methods for optimization of the parameters through cross 
     validation and conformalization of the prediction handling heteroscedasticity.
 
-    This estimator has native support for missing values (NaNs). During
-    training, the tree grower learns at each split point whether samples
-    with missing values should go to the left or right child, based on the
-    potential gain. When predicting, samples with missing values are
-    assigned to the left or right child consequently. If no missing values
-    were encountered for a given feature during training, then samples with
-    missing values are mapped to whichever child has the most samples.
+    This estimator builds an additive model in a forward stage-wise fashion; it
+    allows for the optimization of arbitrary differentiable loss functions. In
+    each stage a regression tree is fit on the negative gradient of the given
+    loss function.
     
     The model only performs Conformalized Quantile Regression based on [1], the
     conformalization is performed on the predicted quantiles separately and not 
@@ -37,154 +32,223 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
     quantiles : array-like of float, default=[0.5]
         This parameter specifies the quantiles to be estimated, each of these
         must be between 0 and 1.
+
     learning_rate : float, default=0.1
-        The learning rate, also known as *shrinkage*. This is used as a
-        multiplicative factor for the leaves values. Use ``1`` for no
-        shrinkage.
-    max_iter : int, default=100
-        The maximum number of iterations of the boosting process, i.e. the
-        maximum number of trees.
-    max_leaf_nodes : int or None, default=31
-        The maximum number of leaves for each tree. Must be strictly greater
-        than 1. If None, there is no maximum limit.
-    max_depth : int or None, default=None
-        The maximum depth of each tree. The depth of a tree is the number of
-        edges to go from the root to the deepest leaf.
-        Depth isn't constrained by default.
-    min_samples_leaf : int, default=20
-        The minimum number of samples per leaf. For small datasets with less
-        than a few hundred samples, it is recommended to lower this value
-        since only very shallow trees would be built.
-    l2_regularization : float, default=0
-        The L2 regularization parameter. Use ``0`` for no regularization
-        (default).
-    max_bins : int, default=255
-        The maximum number of bins to use for non-missing values. Before
-        training, each feature of the input array `X` is binned into
-        integer-valued bins, which allows for a much faster training stage.
-        Features with a small number of unique values may use less than
-        ``max_bins`` bins. In addition to the ``max_bins`` bins, one more bin
-        is always reserved for missing values. Must be no larger than 255.
-    categorical_features : array-like of {bool, int, str} of shape (n_features) \
-            or shape (n_categorical_features,), default=None
-        Indicates the categorical features.
+        Learning rate shrinks the contribution of each tree by `learning_rate`.
+        There is a trade-off between learning_rate and n_estimators.
+        Values must be in the range `[0.0, inf)`.
 
-        - None : no feature will be considered categorical.
-        - boolean array-like : boolean mask indicating categorical features.
-        - integer array-like : integer indices indicating categorical
-          features.
-        - str array-like: names of categorical features (assuming the training
-          data has feature names).
+    n_estimators : int, default=500
+        The number of boosting stages to perform. Gradient boosting
+        is fairly robust to over-fitting so a large number usually
+        results in better performance.
+        Values must be in the range `[1, inf)`.
 
-        For each categorical feature, there must be at most `max_bins` unique
-        categories, and each categorical value must be less then `max_bins - 1`.
-        Negative values for categorical features are treated as missing values.
-        All categorical values are converted to floating point numbers.
-        This means that categorical values of 1.0 and 1 are treated as
-        the same category.
-    monotonic_cst : array-like of int of shape (n_features) or dict, default=None
-        Monotonic constraint to enforce on each feature are specified using the
-        following integer values:
+    subsample : float, default=0.5
+        The fraction of samples to be used for fitting the individual base
+        learners. If smaller than 1.0 this results in Stochastic Gradient
+        Boosting. `subsample` interacts with the parameter `n_estimators`.
+        Choosing `subsample < 1.0` leads to a reduction of variance
+        and an increase in bias.
+        Values must be in the range `(0.0, 1.0]`.
 
-        - 1: monotonic increase
-        - 0: no constraint
-        - -1: monotonic decrease
+    criterion : {'friedman_mse', 'squared_error'}, default='friedman_mse'
+        The function to measure the quality of a split. Supported criteria are
+        "friedman_mse" for the mean squared error with improvement score by
+        Friedman, "squared_error" for mean squared error. The default value of
+        "friedman_mse" is generally the best as it can provide a better
+        approximation in some cases.
 
-        If a dict with str keys, map feature to monotonic constraints by name.
-        If an array, the features are mapped to constraints by position. See
-        :ref:`monotonic_cst_features_names` for a usage example.
+    min_samples_split : int or float, default=2
+        The minimum number of samples required to split an internal node:
 
-        The constraints are only valid for binary classifications and hold
-        over the probability of the positive class.
-    interaction_cst : {"pairwise", "no_interactions"} or sequence of lists/tuples/sets \
-            of int, default=None
-        Specify interaction constraints, the sets of features which can
-        interact with each other in child node splits.
+        - If int, values must be in the range `[2, inf)`.
+        - If float, values must be in the range `(0.0, 1.0]` and `min_samples_split`
+          will be `ceil(min_samples_split * n_samples)`.
 
-        Each item specifies the set of feature indices that are allowed
-        to interact with each other. If there are more features than
-        specified in these constraints, they are treated as if they were
-        specified as an additional set.
+    min_samples_leaf : int or float, default=0.01
+        The minimum number of samples required to be at a leaf node.
+        A split point at any depth will only be considered if it leaves at
+        least ``min_samples_leaf`` training samples in each of the left and
+        right branches.  This may have the effect of smoothing the model,
+        especially in regression.
 
-        The strings "pairwise" and "no_interactions" are shorthands for
-        allowing only pairwise or no interactions, respectively.
+        - If int, values must be in the range `[1, inf)`.
+        - If float, values must be in the range `(0.0, 1.0)` and `min_samples_leaf`
+          will be `ceil(min_samples_leaf * n_samples)`.
 
-        For instance, with 5 features in total, `interaction_cst=[{0, 1}]`
-        is equivalent to `interaction_cst=[{0, 1}, {2, 3, 4}]`,
-        and specifies that each branch of a tree will either only split
-        on features 0 and 1 or only split on features 2, 3 and 4.
+    min_weight_fraction_leaf : float, default=0.0
+        The minimum weighted fraction of the sum total of weights (of all
+        the input samples) required to be at a leaf node. Samples have
+        equal weight when sample_weight is not provided.
+        Values must be in the range `[0.0, 0.5]`.
+
+    max_depth : int or None, default=3
+        Maximum depth of the individual regression estimators. The maximum
+        depth limits the number of nodes in the tree. Tune this parameter
+        for best performance; the best value depends on the interaction
+        of the input variables. If None, then nodes are expanded until
+        all leaves are pure or until all leaves contain less than
+        min_samples_split samples.
+        If int, values must be in the range `[1, inf)`.
+
+    min_impurity_decrease : float, default=0.0
+        A node will be split if this split induces a decrease of the impurity
+        greater than or equal to this value.
+        Values must be in the range `[0.0, inf)`.
+
+        The weighted impurity decrease equation is the following::
+
+            N_t / N * (impurity - N_t_R / N_t * right_impurity
+                                - N_t_L / N_t * left_impurity)
+
+        where ``N`` is the total number of samples, ``N_t`` is the number of
+        samples at the current node, ``N_t_L`` is the number of samples in the
+        left child, and ``N_t_R`` is the number of samples in the right child.
+
+        ``N``, ``N_t``, ``N_t_R`` and ``N_t_L`` all refer to the weighted sum,
+        if ``sample_weight`` is passed.
+
+    init : estimator or 'zero', default=None
+        An estimator object that is used to compute the initial predictions.
+        ``init`` has to provide :term:`fit` and :term:`predict`. If 'zero', the
+        initial raw predictions are set to zero. By default a
+        ``DummyEstimator`` is used, predicting either the average target value
+        (for loss='squared_error'), or a quantile for the other losses.
+
+    random_state : int, RandomState instance or None, default=None
+        Controls the random seed given to each Tree estimator at each
+        boosting iteration.
+        In addition, it controls the random permutation of the features at
+        each split (see Notes for more details).
+        It also controls the random splitting of the training data to obtain a
+        validation set if `n_iter_no_change` is not None.
+        Pass an int for reproducible output across multiple function calls.
+        See :term:`Glossary <random_state>`.
+
+    max_features : {'sqrt', 'log2'}, int or float, default='sqrt'
+        The number of features to consider when looking for the best split:
+
+        - If int, values must be in the range `[1, inf)`.
+        - If float, values must be in the range `(0.0, 1.0]` and the features
+          considered at each split will be `max(1, int(max_features * n_features_in_))`.
+        - If "sqrt", then `max_features=sqrt(n_features)`.
+        - If "log2", then `max_features=log2(n_features)`.
+        - If None, then `max_features=n_features`.
+
+        Choosing `max_features < n_features` leads to a reduction of variance
+        and an increase in bias.
+
+        Note: the search for a split does not stop until at least one
+        valid partition of the node samples is found, even if it requires to
+        effectively inspect more than ``max_features`` features.
+
+    verbose : int, default=0
+        Enable verbose output. If 1 then it prints progress and performance
+        once in a while (the more trees the lower the frequency). If greater
+        than 1 then it prints progress and performance for every tree.
+        Values must be in the range `[0, inf)`.
+
+    max_leaf_nodes : int, default=None
+        Grow trees with ``max_leaf_nodes`` in best-first fashion.
+        Best nodes are defined as relative reduction in impurity.
+        Values must be in the range `[2, inf)`.
+        If None, then unlimited number of leaf nodes.
+
     warm_start : bool, default=False
         When set to ``True``, reuse the solution of the previous call to fit
-        and add more estimators to the ensemble. For results to be valid, the
-        estimator should be re-trained on the same data only.
-        See :term:`the Glossary <warm_start>`.
-    early_stopping : 'auto' or bool, default='auto'
-        If 'auto', early stopping is enabled if the sample size is larger than
-        10000. If True, early stopping is enabled, otherwise early stopping is
-        disabled.
-    scoring : str or callable or None, default='loss'
-        Scoring parameter to use for early stopping. It can be a single
-        string (see :ref:`scoring_parameter`) or a callable (see
-        :ref:`scoring`). If None, the estimator's default scorer is used. If
-        ``scoring='loss'``, early stopping is checked w.r.t the loss value.
-        Only used if early stopping is performed.
-    validation_fraction : int or float or None, default=0.1
-        Proportion (or absolute size) of training data to set aside as
-        validation data for early stopping. If None, early stopping is done on
-        the training data. Only used if early stopping is performed.
+        and add more estimators to the ensemble, otherwise, just erase the
+        previous solution. See :term:`the Glossary <warm_start>`.
+
+    validation_fraction : float, default=0.2
+        The proportion of training data to set aside as validation set for
+        early stopping. Values must be in the range `(0.0, 1.0)`.
+        Only used if ``n_iter_no_change`` is set to an integer.
+
     n_iter_no_change : int, default=10
-        Used to determine when to "early stop". The fitting process is
-        stopped when none of the last ``n_iter_no_change`` scores are better
-        than the ``n_iter_no_change - 1`` -th-to-last one, up to some
-        tolerance. Only used if early stopping is performed.
-    tol : float, default=1e-7
-        The absolute tolerance to use when comparing scores during early
-        stopping. The higher the tolerance, the more likely we are to early
-        stop: higher tolerance means that it will be harder for subsequent
-        iterations to be considered an improvement upon the reference score.
-    verbose : int, default=0
-        The verbosity level. If not zero, print some information about the
-        fitting process.
-    random_state : int, RandomState instance or None, default=None
-        Pseudo-random number generator to control the subsampling in the
-        binning process, and the train/validation data split if early stopping
-        is enabled.
-        Pass an int for reproducible output across multiple function calls.
+        ``n_iter_no_change`` is used to decide if early stopping will be used
+        to terminate training when validation score is not improving. By
+        default it is set to None to disable early stopping. If set to a
+        number, it will set aside ``validation_fraction`` size of the training
+        data as validation and terminate training when validation score is not
+        improving in all of the previous ``n_iter_no_change`` numbers of
+        iterations.
+        Values must be in the range `[1, inf)`.
+
+    tol : float, default=1e-4
+        Tolerance for the early stopping. When the loss is not improving
+        by at least tol for ``n_iter_no_change`` iterations (if set to a
+        number), the training stops.
+        Values must be in the range `[0.0, inf)`.
+
+    ccp_alpha : non-negative float, default=0.0
+        Complexity parameter used for Minimal Cost-Complexity Pruning. The
+        subtree with the largest cost complexity that is smaller than
+        ``ccp_alpha`` will be chosen. By default, no pruning is performed.
+        Values must be in the range `[0.0, inf)`.
+        See :ref:`minimal_cost_complexity_pruning` for details.
 
     Attributes
     ----------
     estimators_ : list of HistGradientBoostingRegressor
         List containing the models for each quantile of interest
+        
     corrections_ : dict of lists of floats
         the dictionary uses the cluster label as key, the values are arrays 
         of floats to be added to the quantile predictions to conformalize
-    do_early_stopping_ : bool
-        Indicates whether early stopping is used during training.
-    n_iter_ : int
-        The number of iterations as selected by early stopping, depending on
-        the `early_stopping` parameter. Otherwise it corresponds to max_iter.
-    n_trees_per_iteration_ : int
-        The number of tree that are built at each iteration. For regressors,
-        this is always 1.
-    train_score_ : ndarray, shape (n_iter_+1,)
-        The scores at each iteration on the training data. The first entry
-        is the score of the ensemble before the first iteration. Scores are
-        computed according to the ``scoring`` parameter. If ``scoring`` is
-        not 'loss', scores are computed on a subset of at most 10 000
-        samples. Empty if no early stopping.
-    validation_score_ : ndarray, shape (n_iter_+1,)
-        The scores at each iteration on the held-out validation data. The
-        first entry is the score of the ensemble before the first iteration.
-        Scores are computed according to the ``scoring`` parameter. Empty if
-        no early stopping or if ``validation_fraction`` is None.
-    is_categorical_ : ndarray, shape (n_features, ) or None
-        Boolean mask for the categorical features. ``None`` if there are no
-        categorical features.
+        
+    feature_importances_ : ndarray of shape (n_features,)
+        The impurity-based feature importances.
+        The higher, the more important the feature.
+        The importance of a feature is computed as the (normalized)
+        total reduction of the criterion brought by that feature.  It is also
+        known as the Gini importance.
+
+        Warning: impurity-based feature importances can be misleading for
+        high cardinality features (many unique values). See
+        :func:`sklearn.inspection.permutation_importance` as an alternative.
+
+    oob_improvement_ : ndarray of shape (n_estimators,)
+        The improvement in loss on the out-of-bag samples
+        relative to the previous iteration.
+        ``oob_improvement_[0]`` is the improvement in
+        loss of the first stage over the ``init`` estimator.
+        Only available if ``subsample < 1.0``.
+
+    oob_scores_ : ndarray of shape (n_estimators,)
+        The full history of the loss values on the out-of-bag
+        samples. Only available if `subsample < 1.0`.
+
+    oob_score_ : float
+        The last value of the loss on the out-of-bag samples. It is
+        the same as `oob_scores_[-1]`. Only available if `subsample < 1.0`.
+
+    train_score_ : ndarray of shape (n_estimators,)
+        The i-th score ``train_score_[i]`` is the loss of the
+        model at iteration ``i`` on the in-bag sample.
+        If ``subsample == 1`` this is the loss on the training data.
+
+    init_ : estimator
+        The estimator that provides the initial predictions.
+        Set via the ``init`` argument or ``loss.init_estimator``.
+
+    estimators_ : ndarray of DecisionTreeRegressor of shape (n_estimators, 1)
+        The collection of fitted sub-estimators.
+
+    n_estimators_ : int
+        The number of estimators as selected by early stopping (if
+        ``n_iter_no_change`` is specified). Otherwise it is set to
+        ``n_estimators``.
+
     n_features_in_ : int
         Number of features seen during :term:`fit`.
+
     feature_names_in_ : ndarray of shape (`n_features_in_`,)
         Names of features seen during :term:`fit`. Defined only when `X`
         has feature names that are all strings.
+
+    max_features_ : int
+        The inferred value of max_features.
 
     References
     --------
@@ -206,107 +270,58 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
     
     def __init__(
         self,
+        *,
         quantiles=[0.5],
-        n_samples=100,
         learning_rate=0.1,
-        max_iter=100,
-        max_leaf_nodes=31,
-        max_depth=None,
-        min_samples_leaf=20,
-        l2_regularization=0.0,
-        max_bins=255,
-        categorical_features=None,
-        monotonic_cst=None,
-        interaction_cst=None,
-        warm_start=False,
-        early_stopping="auto",
-        scoring="loss",
-        validation_fraction=0.1,
-        n_iter_no_change=10,
-        tol=1e-7,
-        verbose=0,
+        n_estimators=500,
+        subsample=0.5,
+        criterion="friedman_mse",
+        min_samples_split=2,
+        min_samples_leaf=0.01,
+        min_weight_fraction_leaf=0.0,
+        max_depth=3,
+        min_impurity_decrease=0.0,
+        init=None,
         random_state=None,
-        ):
-        super(ConfGradientBoostingRegressor, self).__init__(
+        max_features="sqrt",
+        verbose=0,
+        max_leaf_nodes=None,
+        warm_start=False,
+        validation_fraction=0.2,
+        n_iter_no_change=10,
+        tol=1e-4,
+        ccp_alpha=0.0,
+    ):
+        super().__init__(
+            loss='quantile',
             learning_rate=learning_rate,
-            max_iter=max_iter,
-            max_leaf_nodes=max_leaf_nodes,
-            max_depth=max_depth,
+            n_estimators=n_estimators,
+            criterion=criterion,
+            min_samples_split=min_samples_split,
             min_samples_leaf=min_samples_leaf,
-            l2_regularization=l2_regularization,
-            max_bins=max_bins,
-            monotonic_cst=monotonic_cst,
-            interaction_cst=interaction_cst,
-            categorical_features=categorical_features,
-            early_stopping=early_stopping,
+            min_weight_fraction_leaf=min_weight_fraction_leaf,
+            max_depth=max_depth,
+            init=init,
+            subsample=subsample,
+            max_features=max_features,
+            min_impurity_decrease=min_impurity_decrease,
+            random_state=random_state,
+            alpha=0.5,
+            verbose=verbose,
+            max_leaf_nodes=max_leaf_nodes,
             warm_start=warm_start,
-            scoring=scoring,
             validation_fraction=validation_fraction,
             n_iter_no_change=n_iter_no_change,
             tol=tol,
-            verbose=verbose,
-            random_state=random_state,
+            ccp_alpha=ccp_alpha,
         )
         self.quantiles = quantiles
-        self.n_samples = n_samples
-        self.corrections = {}
-        self.quantiles_ = [0.001, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.999]
+        self.corrections_ = {}
         self.estimators_ = []
     
     
-    def optimize(self, X, y, n_iter=10):
-        """Optimize model parameters with Randomized Search Cross Validation
-        Optimized parameters are:
-            max_leaf_nodes : between 10 and 50
-            max_depth : between 3 and 20
-            max_iter : between 50 and 100
-            learning_rate: between 0. and 1.
-        
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_features)
-            The input samples.
-
-        y : array-like of shape (n_samples,)
-            Target values.
-
-        n_iter : int, default=10
-            Number of iterations to search for optimal parameters
-            
-        Returns
-        -------
-        self : object
-            Estimator with optimized parameters.
-        """
-        
-        params = self.get_params().copy()
-        params.pop('quantiles')
-        params['loss'] = 'quantile'
-        params['quantile'] = 0.5
-        estimator = HistGradientBoostingRegressor(**params)
-        params_distributions = dict(
-            max_leaf_nodes=randint(low=10, high=50),
-            max_depth=randint(low=3, high=20),
-            max_iter=randint(low=50, high=100),
-            learning_rate=uniform()
-        )
-        optim_model = RandomizedSearchCV(
-            estimator,
-            param_distributions=params_distributions,
-            n_jobs=-1,
-            n_iter=n_iter,
-            cv=KFold(n_splits=5, shuffle=True),
-            verbose=0
-        )
-        optim_model.fit(X_train, y_train)
-        estimator = optim_model.best_estimator_
-        self.max_iter = estimator.get_params()['max_iter']
-        self.learning_rate = estimator.get_params()['learning_rate']
-        
-        return self
-    
-    def _sample(self, q):
-        return np.interp(np.random.uniform(size=self.n_samples), 
+    def _sample(self, q, size=100):
+        return np.interp(np.random.uniform(size=size), 
                          np.linspace(0,1,len(q)), 
                          q.sort_values())
     
@@ -330,12 +345,12 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
             Fitted estimator.
         """
         
-        for q in self.quantiles_:
+        for q in self.quantiles:
             params = self.get_params().copy()
             params.pop('quantiles')
             params['loss'] = 'quantile'
-            params['quantile'] = q
-            estimator = HistGradientBoostingRegressor(**params)
+            params['alpha'] = q
+            estimator = GradientBoostingRegressor(**params)
             estimator.fit(X, y, sample_weight)
             self.estimators_.append(estimator)
         
@@ -361,11 +376,11 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         score : float
         """
         score = 0.
-        for i in range(len(self.quantiles_)):
+        for i in range(len(self.quantiles)):
             estimator = self.estimators_[i]
             score += mean_pinball_loss(y, 
                                        self.estimators_[i].predict(X), 
-                                       alpha=self.quantiles_[i], 
+                                       alpha=self.quantiles[i], 
                                        sample_weight=sample_weight)
         return score
     
@@ -396,10 +411,10 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         y_hat = self.predict(X)
         
         for l in np.unique(c):
-            self.corrections[l] = []
+            self.corrections_[l] = []
             for i in range(len(self.quantiles)):
                 error = y[c==l] - y_hat[c==l,i]
-                self.corrections[l].append(np.quantile(error, self.quantiles[i], method="higher"))
+                self.corrections_[l].append(np.quantile(error, self.quantiles[i], method="higher"))
         
         return self
     
@@ -418,14 +433,10 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
             The predicted values.
         """
         
-        q = []
+        y = []
         for e in self.estimators_:
-            q.append(e.predict(X))
-        q = np.stack(q, axis=1)
-        q = pd.DataFrame(q)
-        ys = q.apply(self._sample, axis=1, result_type='expand')
-        
-        return ys.quantile(self.quantiles, axis=1).values.T
+            y.append(e.predict(X))
+        return np.stack(y, axis=1)
     
     
     def conformalize(self, y, c=None):
@@ -449,7 +460,7 @@ class ConfGradientBoostingRegressor(HistGradientBoostingRegressor):
         
         yc = y.copy()
         for l in np.unique(c):
-            yc[c==l] = yc[c==l] + self.corrections[l]
+            yc[c==l] = yc[c==l] + self.corrections_[l]
         
         return yc
         

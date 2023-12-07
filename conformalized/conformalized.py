@@ -318,6 +318,13 @@ class ConfGradientBoostingRegressor(GradientBoostingRegressor):
         self.quantiles = quantiles
         self.corrections_ = {}
         self.estimators_ = []
+        for q in self.quantiles:
+            params = self.get_params().copy()
+            params.pop('quantiles')
+            params['loss'] = 'quantile'
+            params['alpha'] = q
+            estimator = GradientBoostingRegressor(**params)
+            self.estimators_.append(estimator)
     
     
     def _sample(self, q, size=100):
@@ -345,15 +352,8 @@ class ConfGradientBoostingRegressor(GradientBoostingRegressor):
             Fitted estimator.
         """
         
-        self.estimators_ = []
-        for q in self.quantiles:
-            params = self.get_params().copy()
-            params.pop('quantiles')
-            params['loss'] = 'quantile'
-            params['alpha'] = q
-            estimator = GradientBoostingRegressor(**params)
+        for estimator in self.estimators_:
             estimator.fit(X, y, sample_weight)
-            self.estimators_.append(estimator)
         
         return self
     

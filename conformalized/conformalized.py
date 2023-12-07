@@ -330,7 +330,7 @@ class ConfGradientBoostingRegressor(GradientBoostingRegressor):
             params.pop('quantiles')
             params['loss'] = 'quantile'
             params['alpha'] = q
-            params['init'] = self.init_estimator_
+            #params['init'] = self.init_estimator_
             estimator = GradientBoostingRegressor(**params)
             self.estimators_.append(estimator)
     

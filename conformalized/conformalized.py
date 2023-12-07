@@ -272,6 +272,7 @@ class ConfGradientBoostingRegressor(GradientBoostingRegressor):
         self,
         *,
         quantiles=[0.5],
+        loss="squared_error",
         learning_rate=0.1,
         n_estimators=500,
         subsample=0.5,
@@ -293,7 +294,7 @@ class ConfGradientBoostingRegressor(GradientBoostingRegressor):
         ccp_alpha=0.0,
     ):
         super().__init__(
-            loss='quantile',
+            loss=loss,
             learning_rate=learning_rate,
             n_estimators=n_estimators,
             criterion=criterion,
@@ -306,7 +307,7 @@ class ConfGradientBoostingRegressor(GradientBoostingRegressor):
             max_features=max_features,
             min_impurity_decrease=min_impurity_decrease,
             random_state=random_state,
-            alpha=0.5,
+            alpha=0.9,
             verbose=verbose,
             max_leaf_nodes=max_leaf_nodes,
             warm_start=warm_start,
@@ -317,12 +318,18 @@ class ConfGradientBoostingRegressor(GradientBoostingRegressor):
         )
         self.quantiles = quantiles
         self.corrections_ = {}
+        
+        params = self.get_params().copy()
+        params.pop('quantiles')
+        self.init_estimator_ = GradientBoostingRegressor(**params)
+
         self.estimators_ = []
         for q in self.quantiles:
             params = self.get_params().copy()
             params.pop('quantiles')
             params['loss'] = 'quantile'
             params['alpha'] = q
+            params['init'] = self.init_estimator_
             estimator = GradientBoostingRegressor(**params)
             self.estimators_.append(estimator)
     
@@ -352,6 +359,8 @@ class ConfGradientBoostingRegressor(GradientBoostingRegressor):
             Fitted estimator.
         """
         
+        self.init_estimator_.fit(X, y, sample_weight)
+
         for estimator in self.estimators_:
             estimator.fit(X, y, sample_weight)
         

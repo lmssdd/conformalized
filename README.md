@@ -29,3 +29,5 @@ pip install git+https://github.com/lmssdd/conformalized.git
 It is similar to any other scikit-learn regressor, but only performs quantile regression on specified quantiles, and conformalizes the results if required. A comparison to standard Gradient Boosting is shown in the [notebook](https://github.com/lmssdd/conformalized/blob/master/plot_gradient_boosting_quantile.ipynb)
 
 
+## Acknowledgements
+We acknowledge the support of the PNRR ICSC National Research Centre for High Performance Computing, Big Data and Quantum Computing (CN00000013), under the NRRP MUR program funded by the NextGenerationEU.
